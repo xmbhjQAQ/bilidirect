@@ -229,9 +229,29 @@ query 参数适合临时测试，但可能出现在浏览器历史、代理记�
 }
 ```
 
-## VPS 配置
+## 配置文件
 
-复制 `config.example.json` 为 `config.json` 后修改：
+项目使用 JSON 配置文件运行。先复制模板：
+
+```bash
+cp config.example.json config.json
+```
+
+然后编辑 `config.json`。如果只是本机测试，可以直接使用下面这份配置：
+
+```json
+{
+  "HOST": "127.0.0.1",
+  "PORT": 8787,
+  "CORS_ENABLED": true,
+  "ALLOWED_ORIGINS": ["*"],
+  "API_KEY": "",
+  "BILIBILI_COOKIE": "",
+  "BILIBILI_USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+}
+```
+
+如果服务要给自己的网站调用，建议改成：
 
 ```json
 {
@@ -239,19 +259,45 @@ query 参数适合临时测试，但可能出现在浏览器历史、代理记�
   "PORT": 8787,
   "CORS_ENABLED": true,
   "ALLOWED_ORIGINS": ["https://www.example.com"],
-  "API_KEY": "",
+  "API_KEY": "请替换为自己生成的随机长字符串",
   "BILIBILI_COOKIE": "",
-  "BILIBILI_USER_AGENT": "Mozilla/5.0 ..."
+  "BILIBILI_USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 }
 ```
 
-| 配置项 | 说明 |
+配置项说明：
+
+| 配置项 | 如何配置 |
 | --- | --- |
-| `HOST` | Node 监听地址，默认 `127.0.0.1` |
-| `PORT` | Node 监听端口，默认 `8787` |
-| `API_KEY` | 非空时启用接口鉴权 |
-| `BILIBILI_COOKIE` | 可选的 B站 Cookie，用于降低部分请求被 HTTP 412 拦截的概率 |
-| `BILIBILI_USER_AGENT` | 请求 B 站时使用的 User-Agent |
+| `HOST` | 建议保持 `127.0.0.1`，让服务只接受本机反向代理请求 |
+| `PORT` | Node 服务端口，默认 `8787`。如果修改，反向代理目标端口也要同步修改 |
+| `CORS_ENABLED` | 是否允许浏览器跨域调用。网站和 API 不同域名时设为 `true` |
+| `ALLOWED_ORIGINS` | 允许访问的完整网站 Origin，例如 `https://www.example.com`。不要填写路径，也不要带结尾 `/` |
+| `API_KEY` | 非空时启用鉴权；留空表示关闭鉴权。建议公网服务配置随机长字符串 |
+| `BILIBILI_COOKIE` | 可选。填写浏览器请求 B 站时的完整 Cookie 字符串，可降低部分请求被 HTTP 412 拦截的概率 |
+| `BILIBILI_USER_AGENT` | 请求 B 站时使用的 User-Agent，通常保持模板默认值即可 |
+
+`ALLOWED_ORIGINS` 的 `"*"` 只适合测试。正式配置应替换为实际网站来源；例如网站地址是 `https://www.example.com/player/`，这里填 `https://www.example.com`。
+
+修改配置后，前台运行的服务需要重新启动：
+
+```bash
+node server-vps.mjs
+```
+
+如果使用 systemd：
+
+```bash
+sudo systemctl restart bilidirect
+```
+
+配置了 `API_KEY` 后，解析测试需要带 key：
+
+```bash
+curl -G 'http://127.0.0.1:8787/api/parse' \
+  --data-urlencode 'bvid=BV1B7411m7LV' \
+  --data-urlencode 'key=你的API_KEY'
+```
 
 `config.json` 仅用于本地/VPS，不要提交到 Git。Cookie 和 API key 也不要写入前端代码。
 
