@@ -1,97 +1,118 @@
-# B站直链解析服务
+# bilidirect
 
-这是一个用于获取 B 站视频元数据、临时播放直链和 XML 弹幕的 API 服务。核心逻辑位于 `worker.js`，可以部署为 Cloudflare Worker，也可以通过 `server-vps.mjs` 在 VPS 上运行。
+B站视频直链与 XML 弹幕 API 服务。
 
-服务本身不保存视频或弹幕文件：
+它接收视频 BV 号，调用 B 站接口获取视频信息和临时播放地址，并提供一个带跨域响应头的 XML 弹幕转发接口。项目支持部署为 Cloudflare Worker，也支持在 VPS 上使用 Node.js 运行。
 
-- 视频由 B 站返回临时签名地址，浏览器直接请求 B 站 CDN 播放。
-- 弹幕接口由本服务实时从 B 站获取 XML 并转发，只补充跨域响应头。
-- `directUrl` 会过期，不能当作永久链接保存。
+> 本项目不是 B 站官方服务。请只处理你有权使用的内容，并遵守 B 站服务条款及当地法律。
 
-## API 快速索引
+## 功能
 
-假设服务地址为：
+- 根据 BV 号获取视频标题、封面、时长、分P和 CID 等信息
+- 获取 B 站临时视频直链，不在本服务保存或转发视频文件
+- 实时转发 B 站 XML 弹幕，并补充浏览器所需的 CORS 响应头
+- 支持 API key 鉴权和来源限制
+- 支持 Cloudflare Worker 与 VPS Node.js 两种运行方式
+
+请求和媒体的关系如下：
+
+```text
+浏览器 ──解析/弹幕请求──> bilidirect ──> B站接口
+浏览器 <────视频直链──── B站 CDN
+```
+
+视频流不会经过本服务，只有解析请求和弹幕 XML 请求会经过本服务。
+
+## 快速开始
+
+### Cloudflare Worker
+
+需要 Node.js 和 Wrangler。登录并部署：
+
+```bash
+npx wrangler login
+npx wrangler deploy
+```
+
+部署后访问：
+
+```text
+https://你的 Worker 域名/api/parse?bvid=BV1B7411m7LV
+```
+
+生产环境建议配置 API key 和允许的前端来源。`wrangler.toml` 中可以配置普通变量，敏感值使用 Secret：
+
+```bash
+npx wrangler secret put API_KEY
+npx wrangler secret put BILIBILI_COOKIE
+```
+
+### VPS Node.js
+
+需要 Node.js 20 或更高版本。将以下文件上传到同一目录：
+
+```text
+worker.js
+server-vps.mjs
+package.json
+config.example.json
+```
+
+创建配置并启动：
+
+```bash
+cp config.example.json config.json
+nano config.json
+chmod 600 config.json
+node server-vps.mjs
+```
+
+默认只监听本机 `127.0.0.1:8787`：
+
+```text
+http://127.0.0.1:8787/api/health
+```
+
+生产环境建议使用 systemd 守护进程，并通过 Nginx 或 Cloudflare Tunnel 提供 HTTPS 公网地址。不要直接暴露 Node 服务端口。
+
+## API
+
+以下示例假设服务地址为：
 
 ```text
 https://api.example.com
 ```
 
-| 方法 | 路径 | 用途 | 响应类型 |
-| --- | --- | --- | --- |
-| `GET` | `/` | 查看服务信息和基础用法 | JSON |
-| `GET` | `/api/health` | 健康检查 | JSON |
-| `GET` / `POST` | `/api/parse` | 解析视频信息和播放直链 | JSON |
-| `GET` | `/api/danmaku` | 获取并转发 XML 弹幕 | XML |
-| `OPTIONS` | 任意路径 | CORS 预检请求 | `204` |
+### `GET /api/parse`
 
-除 `/api/health` 外，接口是否需要 API key 由 `API_KEY` 配置决定。
+解析视频并获取播放信息。
 
-## `/api/parse` 解析视频
-
-### GET 请求
-
-最简单的请求：
-
-```text
-GET /api/parse?bvid=BV1B7411m7LV
+```bash
+curl -G 'https://api.example.com/api/parse' \
+  --data-urlencode 'bvid=BV1B7411m7LV'
 ```
 
-带分P、清晰度和格式参数：
+也支持 `POST` JSON：
 
-```text
-GET /api/parse?bvid=BV1B7411m7LV&page=1&qn=80&fnval=0&fourk=1&probe=1
+```bash
+curl 'https://api.example.com/api/parse' \
+  -H 'Content-Type: application/json' \
+  --data '{"bvid":"BV1B7411m7LV","page":1,"qn":80}'
 ```
 
-如果服务配置了 `API_KEY`，调试时可以把 key 放在 query 参数中：
-
-```text
-GET /api/parse?bvid=BV1B7411m7LV&key=你的key
-```
-
-### POST 请求
-
-```http
-POST /api/parse
-Content-Type: application/json
-X-API-Key: 你的key
-
-{
-  "bvid": "BV1B7411m7LV",
-  "page": 1,
-  "qn": 80,
-  "fnval": 0,
-  "fourk": 1,
-  "probe": 1
-}
-```
-
-POST 也可以把 `key` 放在 JSON body 中：
-
-```json
-{
-  "bvid": "BV1B7411m7LV",
-  "key": "你的key",
-  "page": 1
-}
-```
-
-### 请求参数
+参数：
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `bvid` | 是 | 无 | B 站视频 BV 号，例如 `BV1B7411m7LV` |
-| `page` | 否 | `1` | 分P序号，也支持使用别名 `p` |
-| `qn` | 否 | `80` | 清晰度。支持：`16`、`32`、`64`、`80`、`112`、`116`、`120`、`125`、`126`、`127`、`128`、`208` |
-| `fnval` | 否 | `0` | `0` 返回 MP4/durl；`4048` 请求 DASH |
+| `bvid` | 是 | - | 视频 BV 号 |
+| `page` | 否 | `1` | 分P序号，也支持 `p` |
+| `qn` | 否 | `80` | 清晰度，支持 `16`、`32`、`64`、`80`、`112`、`116`、`120`、`125`、`126`、`127`、`128`、`208` |
+| `fnval` | 否 | `0` | `0` 请求 MP4/durl；`4048` 请求 DASH 信息 |
 | `fourk` | 否 | `1` | 是否请求 4K，取值 `0` 或 `1` |
-| `probe` | 否 | `1` | 是否由服务端用 `Range: bytes=0-1` 检查直链。传 `0` 可跳过检查 |
-| `key` | 按配置 | 无 | API key。GET 使用 query 参数，POST 可使用 JSON body |
+| `probe` | 否 | `1` | 是否探测直链。传 `0` 可跳过探测 |
+| `key` | 按配置 | - | API key，GET 使用 query 参数，POST 可放 JSON body |
 
-`duration` 的单位是秒；`playback.timelength` 的单位是毫秒；`directUrlExpiresAt` 是 Unix 时间戳，单位是秒。
-
-### 成功响应
-
-HTTP 状态码为 `200`，响应结构如下：
+成功响应：
 
 ```json
 {
@@ -103,112 +124,61 @@ HTTP 状态码为 `200`，响应结构如下：
     "cid": 168325345,
     "page": 1,
     "title": "视频标题",
-    "description": "视频简介",
-    "cover": "https://i0.hdslb.com/...jpg",
-    "pic": "https://i0.hdslb.com/...jpg",
-    "view": 123456,
-    "playCount": 123456,
     "duration": 590,
     "directUrl": "https://upos-...bilivideo.com/...mp4?...",
     "streamType": "durl",
     "format": "mp4",
     "quality": 80,
-    "danmakuUrl": "https://api.example.com/api/danmaku?bvid=BV1B7411m7LV&aid=98647868&cid=168325345&page=1",
-    "danmukuUrl": "https://api.example.com/api/danmaku?bvid=BV1B7411m7LV&aid=98647868&cid=168325345&page=1",
+    "danmakuUrl": "https://api.example.com/api/danmaku?cid=168325345&bvid=BV1B7411m7LV",
+    "danmukuUrl": "https://api.example.com/api/danmaku?cid=168325345&bvid=BV1B7411m7LV",
     "danmakuSourceUrl": "https://comment.bilibili.com/168325345.xml",
     "video": {},
-    "playback": {
-      "apiMode": "legacy_html5",
-      "streamType": "durl",
-      "directUrl": "https://upos-...bilivideo.com/...mp4?...",
-      "directUrlExpiresAt": 1787939199,
-      "format": "mp4",
-      "quality": 80,
-      "timelength": 589675,
-      "acceptQuality": [80, 16],
-      "acceptDescription": ["高清 1080P", "流畅 360P"],
-      "durl": [],
-      "dash": null,
-      "directProbe": {
-        "status": 206,
-        "ok": true,
-        "contentType": "video/mp4",
-        "contentRange": "bytes 0-1/125096322"
-      },
-      "candidates": []
-    },
-    "danmaku": {
-      "url": "https://api.example.com/api/danmaku?bvid=BV1B7411m7LV&aid=98647868&cid=168325345&page=1",
-      "sourceUrl": "https://comment.bilibili.com/168325345.xml",
-      "format": "xml",
-      "cid": 168325345,
-      "aid": 98647868,
-      "page": 1
-    },
-    "diagnostics": {}
+    "playback": {}
   }
 }
 ```
 
 常用字段：
 
-| 字段 | 说明 |
-| --- | --- |
-| `data.duration` | 视频总时长，单位为秒 |
-| `data.cid` | 当前分P的 CID，获取弹幕时使用 |
-| `data.directUrl` | B 站临时视频直链，可直接赋给 `<video>` |
-| `data.playback.directUrlExpiresAt` | 直链预计过期时间 |
-| `data.playback.directProbe` | 服务端直链探测结果。`206` 通常表示支持 Range 播放 |
-| `data.danmukuUrl` | 本服务提供的 XML 弹幕地址 |
-| `data.danmakuSourceUrl` | B 站原始 XML 地址，浏览器跨域时不建议直接使用 |
-| `data.video.pages` | 所有分P的 `cid`、标题、时长和尺寸 |
-| `data.video.owner` | UP 主信息 |
-| `data.video.stat` | B 站统计信息 |
+- `duration`：当前分P时长，单位为秒
+- `cid`：当前分P CID，可用于获取弹幕
+- `directUrl`：B站临时签名视频地址
+- `playback.directUrlExpiresAt`：直链预计过期时间，Unix 秒级时间戳
+- `danmakuUrl` / `danmukuUrl`：本服务的 XML 弹幕地址
+- `danmakuSourceUrl`：B站原始 XML 地址，浏览器跨域场景应优先使用本服务地址
 
-`video`、`playback`、`diagnostics` 中包含更完整的原始信息，客户端通常只需要 `duration`、`playback.directUrl`、`cid` 和 `danmukuUrl`。
+`directUrl` 会过期，请在需要播放时重新调用解析接口，不要把它当作永久链接保存。
 
-## `/api/danmaku` 获取弹幕 XML
+### `GET /api/danmaku`
 
-### 请求
+获取并转发当前分P的 XML 弹幕。
 
-```text
-GET /api/danmaku?cid=168325345&bvid=BV1B7411m7LV
+```bash
+curl 'https://api.example.com/api/danmaku?cid=168325345&bvid=BV1B7411m7LV'
 ```
 
-其中 `cid` 必填，`bvid` 用于构造请求 B 站时的 Referer，可选。`aid` 和 `page` 可以随链接传入，但本接口实际只依赖 `cid`。
+参数：
 
-如果配置了 API key：
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `cid` | 是 | 当前分P CID |
+| `bvid` | 否 | 用于构造请求 B 站时的 Referer |
+| `key` | 按配置 | API key |
 
-```text
-GET /api/danmaku?cid=168325345&bvid=BV1B7411m7LV&key=你的key
-```
-
-成功时：
-
-- HTTP 状态码：`200`
-- `Content-Type`：`text/xml; charset=utf-8`
-- 响应内容：B 站 XML 原文
-- 不保存文件，不转换为 JSON
-
-使用解析接口返回的地址：
-
-```js
-const result = await fetch(
-  'https://api.example.com/api/parse?bvid=BV1B7411m7LV&key=你的key'
-).then((response) => response.json());
-
-const { directUrl, duration, danmukuUrl } = result.data;
-console.log('视频直链：', directUrl);
-console.log('总时长（秒）：', duration);
-console.log('弹幕 XML 地址：', danmukuUrl);
-```
-
-如果解析接口使用 `X-API-Key` 请求头鉴权，返回的 `danmukuUrl` 不会自动携带 key。此时需要由调用方给弹幕地址追加 key，或让弹幕请求也带上 `X-API-Key` 请求头。调试阶段可以使用解析接口的 `key` query 参数，让返回的 `danmukuUrl` 自动带上 key。query 参数可能出现在浏览器历史和服务器日志中，正式环境建议改用短期 token 或自行封装鉴权。
-
-## `/api/health` 健康检查
+成功响应的 `Content-Type` 为：
 
 ```text
-GET /api/health
+text/xml; charset=utf-8
+```
+
+本接口不保存弹幕，也不转换 XML 内容。
+
+### `GET /api/health`
+
+检查服务是否能够正常响应：
+
+```bash
+curl 'https://api.example.com/api/health'
 ```
 
 示例响应：
@@ -223,150 +193,77 @@ GET /api/health
 }
 ```
 
-健康检查只表示 Node/Worker 服务正常响应，不代表当前一定能通过 B 站风控或获取到某个视频直链。请用 `/api/parse` 做完整链路测试。
+健康检查只代表本服务在线，不代表 B 站一定允许当前出口请求；完整测试请调用 `/api/parse`。
 
-## 鉴权
+## 鉴权与跨域
 
-配置 `API_KEY` 后，`/api/parse` 和 `/api/danmaku` 都需要鉴权。支持三种方式：
+### API key
 
-### GET query 参数
-
-```text
-?key=你的key
-```
-
-### 请求头
+配置 `API_KEY` 后，`/api/parse` 和 `/api/danmaku` 需要鉴权。支持：
 
 ```http
 X-API-Key: 你的key
 ```
 
-### POST JSON body
+或：
 
-```json
-{
-  "bvid": "BV1B7411m7LV",
-  "key": "你的key"
-}
+```text
+?key=你的key
 ```
 
-如果没有配置 `API_KEY`，鉴权关闭，接口可以直接调用。生产环境建议配置 key，并限制 `ALLOWED_ORIGINS`。
+POST 请求还可以把 key 放在 JSON body 中。`/api/health` 不需要 API key。
 
-## 错误响应和错误码
+query 参数适合临时测试，但可能出现在浏览器历史、代理记录和访问日志中；正式环境优先使用 `X-API-Key`。
 
-JSON 接口和弹幕接口发生错误时，响应结构统一为：
-
-```json
-{
-  "ok": false,
-  "code": -401,
-  "message": "API key 缺失或错误",
-  "details": {}
-}
-```
-
-| HTTP 状态 | `code` | 含义 |
-| ---: | ---: | --- |
-| `400` | `-400` | 参数格式或取值错误 |
-| `401` | `-401` | API key 缺失或错误 |
-| `404` | `-404` | 找不到指定分P |
-| `404` | `-404` | 未知路径也会返回 `Not Found` |
-| `502` | `-412` | B 站 HTTP 412 风控拦截 |
-| `502` | `-502` | B 站接口、弹幕接口或网络请求失败 |
-| `502` | B 站返回的 code | B 站业务接口返回非零 code |
-| `500` | `-500` | VPS Node 适配层内部异常 |
-
-`details` 可能包含 B 站上游状态、请求端点、Cookie 是否配置、直链探测结果等诊断信息，客户端不应依赖其中的字段。
-
-## 跨域和直链注意事项
-
-`/api/parse`、`/api/health` 和 `/api/danmaku` 会按照 CORS 配置返回跨域响应头。视频直链是 B 站 CDN 地址，浏览器播放时建议：
-
-```html
-<video referrerpolicy="no-referrer" controls></video>
-```
-
-不要把 `data.danmakuSourceUrl` 直接交给浏览器端读取，因为 B 站原始 XML 地址通常没有允许你的网站读取的 `Access-Control-Allow-Origin`。应使用本服务返回的 `data.danmakuUrl` 或 `data.danmukuUrl`。
-
-视频流不经过本服务，VPS 不会转发视频流量；只有解析请求和弹幕 XML 请求经过本服务。
-
-## Cloudflare Worker 部署
-
-```bash
-npx wrangler login
-npx wrangler deploy
-```
-
-如果需要登录态内容，在部署前单独配置服务端 Secret：
-
-```bash
-npx wrangler secret put BILIBILI_COOKIE
-```
-
-不要把 `BILIBILI_COOKIE` 返回给客户端，也不要提交到代码仓库。
-
-## 部署到 VPS
-
-`worker.js` 是核心解析逻辑，VPS 使用 `server-vps.mjs` 提供 Node HTTP 服务。需要 Node.js 20 或更高版本，不需要安装 npm 依赖。
+### CORS
 
 配置项：
 
-- `CORS_ENABLED`：`true`/`false`，控制是否返回 CORS 响应头，默认 `true`。
-- `ALLOWED_ORIGINS`：允许的 Origin，JSON 中可写字符串或数组。
-- `API_KEY`：非空时启用鉴权；GET 使用 `key` 参数，POST 可在 JSON body 中传 `key`，也支持 `X-API-Key` 请求头。
+| 配置项 | 说明 |
+| --- | --- |
+| `CORS_ENABLED` | 是否返回 CORS 响应头，默认开启 |
+| `ALLOWED_ORIGINS` | 允许的 Origin，可填写 `*`、单个字符串或逗号分隔的多个来源 |
 
-先上传这两个文件到 VPS，例如 `/opt/bilidirect/`：
+生产环境不要长期使用 `ALLOWED_ORIGINS: "*"`，应填写实际前端域名，例如：
 
-```text
-worker.js
-server-vps.mjs
-config.example.json
+```json
+{
+  "CORS_ENABLED": true,
+  "ALLOWED_ORIGINS": ["https://www.example.com"]
+}
 ```
 
-复制 `config.example.json` 为 `config.json`，填入实际配置。`config.json` 已被 `.gitignore` 忽略，不要提交到仓库。
+## VPS 配置
 
-临时运行测试：
-
-```bash
-cd /opt/bilidirect
-cp config.example.json config.json
-nano config.json
-chmod 600 config.json
-node server-vps.mjs
-```
-
-另开一个终端测试：
-
-```bash
-curl 'http://127.0.0.1:8787/api/parse?bvid=BV1B7411m7LV'
-```
-
-生产环境也可以把 JSON 配置放到独立目录：
-
-```bash
-sudo useradd --system --home /opt/bilidirect --shell /usr/sbin/nologin bilidirect
-sudo chown -R bilidirect:bilidirect /opt/bilidirect
-sudo install -d -o bilidirect -g bilidirect -m 700 /etc/bilidirect
-sudo install -o bilidirect -g bilidirect -m 600 config.json /etc/bilidirect/config.json
-```
-
-JSON 内容示例：
+复制 `config.example.json` 为 `config.json` 后修改：
 
 ```json
 {
   "HOST": "127.0.0.1",
   "PORT": 8787,
   "CORS_ENABLED": true,
-  "ALLOWED_ORIGINS": ["https://你的前端域名"],
-  "API_KEY": "你的调试key",
-  "BILIBILI_COOKIE": "完整Cookie"
+  "ALLOWED_ORIGINS": ["https://www.example.com"],
+  "API_KEY": "",
+  "BILIBILI_COOKIE": "",
+  "BILIBILI_USER_AGENT": "Mozilla/5.0 ..."
 }
 ```
 
-然后用 systemd 守护：
+| 配置项 | 说明 |
+| --- | --- |
+| `HOST` | Node 监听地址，默认 `127.0.0.1` |
+| `PORT` | Node 监听端口，默认 `8787` |
+| `API_KEY` | 非空时启用接口鉴权 |
+| `BILIBILI_COOKIE` | 可选的 B站 Cookie，用于降低部分请求被 HTTP 412 拦截的概率 |
+| `BILIBILI_USER_AGENT` | 请求 B 站时使用的 User-Agent |
+
+`config.json` 仅用于本地/VPS，不要提交到 Git。Cookie 和 API key 也不要写入前端代码。
+
+## systemd 后台运行
+
+创建 `/etc/systemd/system/bilidirect.service`：
 
 ```ini
-# /etc/systemd/system/bilidirect.service
 [Unit]
 Description=Bilibili direct parser
 After=network-online.target
@@ -383,39 +280,39 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+启动和查看日志：
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now bilidirect
 sudo systemctl status bilidirect
+sudo journalctl -u bilidirect -f
 ```
 
-外网访问建议通过 Nginx 反向代理并启用 HTTPS，前端请求地址改成：
+如果项目放在其他目录，请同步修改 `WorkingDirectory`、`CONFIG_FILE` 和 `ExecStart`。
 
-```text
-https://你的域名/api/parse?bvid=BV1B7411m7LV
-```
+## 常见错误
 
-Nginx 需要把公网 Host 和协议传给 Node，否则接口生成的 `danmukuUrl` 可能仍然是 `127.0.0.1:8787` 或 `http://`：
+| HTTP | code | 说明 |
+| ---: | ---: | --- |
+| `400` | `-400` | 参数无效 |
+| `401` | `-401` | API key 缺失或错误 |
+| `404` | `-404` | 路径不存在或找不到分P |
+| `502` | `-412` | B站风控返回 HTTP 412 |
+| `502` | `-502` | B站接口或网络请求失败 |
+| `500` | `-500` | VPS Node 服务内部异常 |
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name api.example.com;
+收到 HTTP 412 时，可以先检查服务器出口是否被 B 站风控；必要时在 Worker Secret 或 VPS `config.json` 中配置有效的 `BILIBILI_COOKIE`。不要把 Cookie 放入公开仓库。
 
-    location / {
-        proxy_pass http://127.0.0.1:8787;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
+## 文件说明
 
-通过 `https://api.example.com/api/parse` 请求时，返回的 `danmukuUrl` 会自动使用 `https://api.example.com/api/danmaku...`。直接在 VPS 上用 `127.0.0.1:8787` 测试时，返回本机地址是正常的。
+| 文件 | 作用 |
+| --- | --- |
+| `worker.js` | 核心 API 逻辑，可部署到 Cloudflare Worker |
+| `server-vps.mjs` | 将核心逻辑包装为 Node.js HTTP 服务 |
+| `config.example.json` | VPS 配置模板 |
+| `wrangler.toml` | Cloudflare Worker 配置 |
 
-如果在 Cloudflare Worker 上启用 key，建议使用 Secret：
+## License
 
-```bash
-npx wrangler secret put API_KEY
-```
+详见仓库中的 `LICENSE` 文件。
