@@ -2,7 +2,7 @@
 
 B站视频直链与 XML 弹幕 API 服务。
 
-它接收视频 BV 号，调用 B 站接口获取视频信息和临时播放地址，并提供一个带跨域响应头的 XML 弹幕转发接口。项目支持部署为 Cloudflare Worker，也支持在 VPS 上使用 Node.js 运行。
+它接收视频 BV 号，调用 B 站接口获取视频信息和临时播放地址，并提供一个带跨域响应头的 XML 弹幕转发接口。项目可以直接在本地电脑或 VPS 上使用 Node.js 运行。
 
 > 本项目不是 B 站官方服务。请只处理你有权使用的内容，并遵守 B 站服务条款及当地法律。
 
@@ -12,7 +12,6 @@ B站视频直链与 XML 弹幕 API 服务。
 - 获取 B 站临时视频直链，不在本服务保存或转发视频文件
 - 实时转发 B 站 XML 弹幕，并补充浏览器所需的 CORS 响应头
 - 支持 API key 鉴权和来源限制
-- 支持 Cloudflare Worker 与 VPS Node.js 两种运行方式
 
 请求和媒体的关系如下：
 
@@ -25,45 +24,35 @@ B站视频直链与 XML 弹幕 API 服务。
 
 ## 快速开始
 
-### Cloudflare Worker
+### 1. 准备环境
 
-需要 Node.js 和 Wrangler。登录并部署：
+需要 Node.js 20 或更高版本。本项目没有运行时依赖，不需要执行 `npm install`。
 
-```bash
-npx wrangler login
-npx wrangler deploy
-```
-
-部署后访问：
-
-```text
-https://你的 Worker 域名/api/parse?bvid=BV1B7411m7LV
-```
-
-生产环境建议配置 API key 和允许的前端来源。`wrangler.toml` 中可以配置普通变量，敏感值使用 Secret：
+### 2. 获取项目
 
 ```bash
-npx wrangler secret put API_KEY
-npx wrangler secret put BILIBILI_COOKIE
+git clone https://github.com/xmbhjQAQ/bilidirect.git
+cd bilidirect
 ```
 
-### VPS Node.js
-
-需要 Node.js 20 或更高版本。将以下文件上传到同一目录：
-
-```text
-worker.js
-server-vps.mjs
-package.json
-config.example.json
-```
-
-创建配置并启动：
+### 3. 创建配置
 
 ```bash
 cp config.example.json config.json
 nano config.json
 chmod 600 config.json
+```
+
+Windows PowerShell 可以使用：
+
+```powershell
+Copy-Item config.example.json config.json
+notepad config.json
+```
+
+### 4. 启动服务
+
+```bash
 node server-vps.mjs
 ```
 
@@ -73,7 +62,14 @@ node server-vps.mjs
 http://127.0.0.1:8787/api/health
 ```
 
-生产环境建议使用 systemd 守护进程，并通过 Nginx 或 Cloudflare Tunnel 提供 HTTPS 公网地址。不要直接暴露 Node 服务端口。
+另开一个终端测试解析：
+
+```bash
+curl -G 'http://127.0.0.1:8787/api/parse' \
+  --data-urlencode 'bvid=BV1B7411m7LV'
+```
+
+生产环境建议使用 systemd 守护进程，并通过反向代理提供 HTTPS 公网地址。不要直接暴露 Node 服务端口。
 
 ## API
 
@@ -302,16 +298,15 @@ sudo journalctl -u bilidirect -f
 | `502` | `-502` | B站接口或网络请求失败 |
 | `500` | `-500` | VPS Node 服务内部异常 |
 
-收到 HTTP 412 时，可以先检查服务器出口是否被 B 站风控；必要时在 Worker Secret 或 VPS `config.json` 中配置有效的 `BILIBILI_COOKIE`。不要把 Cookie 放入公开仓库。
+收到 HTTP 412 时，可以先检查服务器出口是否被 B 站风控；必要时在 VPS `config.json` 中配置有效的 `BILIBILI_COOKIE`。不要把 Cookie 放入公开仓库。
 
 ## 文件说明
 
 | 文件 | 作用 |
 | --- | --- |
-| `worker.js` | 核心 API 逻辑，可部署到 Cloudflare Worker |
+| `worker.js` | 核心 API 逻辑 |
 | `server-vps.mjs` | 将核心逻辑包装为 Node.js HTTP 服务 |
 | `config.example.json` | VPS 配置模板 |
-| `wrangler.toml` | Cloudflare Worker 配置 |
 
 ## License
 
