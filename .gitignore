@@ -1,0 +1,8 @@
+config.json
+*.env
+*.log
+.dev.vars
+.wrangler/
+.cloudflared/
+node_modules/
+__pycache__/

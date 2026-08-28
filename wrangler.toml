@@ -1,0 +1,13 @@
+name = "bilidirect"
+main = "worker.js"
+compatibility_date = "2026-08-28"
+workers_dev = true
+
+[vars]
+# 生产环境建议改成你的站点 Origin，多个值用逗号分隔；"*" 适合当前接口测试。
+CORS_ENABLED = "true"
+ALLOWED_ORIGINS = "*"
+BILIBILI_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+
+# 如果以后需要登录态视频，请使用：wrangler secret put BILIBILI_COOKIE
+# 不要把 Cookie 写进 vars、代码或前端。

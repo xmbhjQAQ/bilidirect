@@ -1,0 +1,11 @@
+{
+  "HOST": "127.0.0.1",
+  "PORT": 8787,
+  "CORS_ENABLED": true,
+  "ALLOWED_ORIGINS": [
+    "https://你的前端域名"
+  ],
+  "API_KEY": "",
+  "BILIBILI_COOKIE": "",
+  "BILIBILI_USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+}
