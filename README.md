@@ -2,7 +2,7 @@
 
 B站视频直链与 XML 弹幕 API 服务。
 
-它接收视频 BV 号，调用 B 站接口获取视频信息和临时播放地址，并提供一个带跨域响应头的 XML 弹幕转发接口。项目可以直接在本地电脑或 VPS 上使用 Node.js 运行。
+它接收视频 BV 号或 B 站视频链接，调用 B 站接口获取视频信息和临时播放地址，并提供一个带跨域响应头的 XML 弹幕转发接口。项目可以直接在本地电脑或 VPS 上使用 Node.js 运行。
 
 > 本项目不是 B 站官方服务。请只处理你有权使用的内容，并遵守 B 站服务条款及当地法律。
 
@@ -88,25 +88,45 @@ curl -G 'https://api.example.com/api/parse' \
   --data-urlencode 'bvid=BV1B7411m7LV'
 ```
 
+也可以直接传入 B 站视频链接或 `b23.tv` 短链接：
+
+```bash
+curl -G 'https://api.example.com/api/parse' \
+  --data-urlencode 'url=https://www.bilibili.com/video/BV1B7411m7LV/?vd_source=example'
+
+curl -G 'https://api.example.com/api/parse' \
+  --data-urlencode 'url=https://b23.tv/7WpblY1'
+```
+
 也支持 `POST` JSON：
 
 ```bash
 curl 'https://api.example.com/api/parse' \
   -H 'Content-Type: application/json' \
-  --data '{"bvid":"BV1B7411m7LV","page":1,"qn":80}'
+  --data '{"url":"https://b23.tv/7WpblY1","page":1,"qn":80}'
 ```
 
 参数：
 
 | 参数 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `bvid` | 是 | - | 视频 BV 号 |
+| `bvid` | 与 `url` 二选一 | - | 视频 BV 号。若同时传入 `url`，优先使用 `url` |
+| `url` | 与 `bvid` 二选一 | - | B站视频链接或 `b23.tv` 短链接。标准视频链接中的 query 参数会被忽略 |
 | `page` | 否 | `1` | 分P序号，也支持 `p` |
 | `qn` | 否 | `80` | 清晰度，支持 `16`、`32`、`64`、`80`、`112`、`116`、`120`、`125`、`126`、`127`、`128`、`208` |
 | `fnval` | 否 | `0` | `0` 请求 MP4/durl；`4048` 请求 DASH 信息 |
 | `fourk` | 否 | `1` | 是否请求 4K，取值 `0` 或 `1` |
 | `probe` | 否 | `1` | 是否探测直链。传 `0` 可跳过探测 |
 | `key` | 按配置 | - | API key，GET 使用 query 参数，POST 可放 JSON body |
+
+支持的输入形式：
+
+- `BV1B7411m7LV`
+- `https://www.bilibili.com/video/BV1B7411m7LV`
+- `https://www.bilibili.com/video/BV1B7411m7LV/?vd_source=...`
+- `https://b23.tv/7WpblY1`
+
+`b23.tv` 短链接由服务端跟随重定向并提取 BV 号，不会保存短链接内容。QQ 小程序分享链接（例如 `m.q.qq.com/a/s/...`）在电脑端通常只返回扫码页面，页面不包含 B 站视频地址，因此无法可靠自动还原；请在 QQ 中打开后复制 B 站视频链接或 `b23.tv` 短链接。
 
 成功响应：
 
@@ -115,11 +135,18 @@ curl 'https://api.example.com/api/parse' \
   "ok": true,
   "code": 0,
   "data": {
-    "bvid": "BV1B7411m7LV",
+    "source": {
+      "input": "https://b23.tv/7WpblY1",
+      "resolvedUrl": "https://www.bilibili.com/video/BV1bMhV6PEtE?...",
+      "type": "b23.tv 短链接"
+    },
+    "bvid": "BV1bMhV6PEtE",
     "aid": 98647868,
     "cid": 168325345,
     "page": 1,
     "title": "视频标题",
+    "cover": "https://i0.hdslb.com/bfs/archive/...jpg",
+    "pic": "https://i0.hdslb.com/bfs/archive/...jpg",
     "duration": 590,
     "directUrl": "https://upos-...bilivideo.com/...mp4?...",
     "streamType": "durl",
@@ -137,7 +164,9 @@ curl 'https://api.example.com/api/parse' \
 常用字段：
 
 - `duration`：当前分P时长，单位为秒
+- `source`：输入类型、原始输入和短链接解析后的地址
 - `cid`：当前分P CID，可用于获取弹幕
+- `cover` / `pic`：B站视频封面直链，已统一为 HTTPS，可直接用于图片请求
 - `directUrl`：B站临时签名视频地址
 - `playback.directUrlExpiresAt`：直链预计过期时间，Unix 秒级时间戳
 - `danmakuUrl` / `danmukuUrl`：本服务的 XML 弹幕地址

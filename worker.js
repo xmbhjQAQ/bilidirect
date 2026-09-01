@@ -5,6 +5,7 @@ const BILI_UA =
   "Chrome/151.0.0.0 Safari/537.36";
 const BVID_RE = /^BV[0-9A-Za-z]{10,}$/;
 const ALLOWED_QN = new Set([16, 32, 64, 80, 112, 116, 120, 125, 126, 127, 128, 208]);
+const MAX_SOURCE_REDIRECTS = 4;
 
 
 class ApiError extends Error {
@@ -221,6 +222,152 @@ function normalizeCover(url) {
 }
 
 
+function findBvid(value) {
+  const match = String(value || "").match(/(?:^|\/)(BV[0-9A-Za-z]{10,})(?=\/|[?#]|$)/);
+  return match ? match[1] : null;
+}
+
+
+function parseHttpUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  try {
+    const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const url = new URL(candidate);
+    return ["http:", "https:"].includes(url.protocol) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+
+function isHostname(url, hostname) {
+  return url.hostname === hostname || url.hostname.endsWith(`.${hostname}`);
+}
+
+
+function isBilibiliHostname(url) {
+  return isHostname(url, "bilibili.com") || isHostname(url, "b23.tv");
+}
+
+
+function isSupportedSourceHostname(url) {
+  return isBilibiliHostname(url) || isHostname(url, "qq.com");
+}
+
+
+async function resolveRedirectSource(url, env, sourceType, inputValue) {
+  let current = url;
+  const visited = new Set();
+
+  for (let index = 0; index < MAX_SOURCE_REDIRECTS; index += 1) {
+    if (visited.has(current.toString())) break;
+    visited.add(current.toString());
+
+    let response;
+    try {
+      response = await fetch(current, {
+        redirect: "manual",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+          "User-Agent": env.BILIBILI_USER_AGENT || BILI_UA,
+        },
+      });
+    } catch (error) {
+      throw new ApiError(`请求${sourceType}失败：${error.message}`, 502, -502, {
+        inputUrl: inputValue,
+        sourceType,
+      });
+    }
+
+    const location = response.headers.get("Location");
+    const locationBvid = findBvid(location);
+    if (locationBvid) {
+      return {
+        bvid: locationBvid,
+        inputUrl: inputValue,
+        resolvedUrl: location ? new URL(location, current).toString() : current.toString(),
+        sourceType,
+      };
+    }
+
+    if (location) {
+      let next;
+      try {
+        next = new URL(location, current);
+      } catch {
+        break;
+      }
+      if (!isSupportedSourceHostname(next)) break;
+      current = next;
+      continue;
+    }
+
+    // 某些 QQ 小程序页面不会跳转，而是把目标地址放在 HTML 中。
+    // 只读取受支持来源的页面，避免把 url 参数变成任意地址请求代理。
+    if (response.ok && (sourceType === "QQ 小程序链接" || isBilibiliHostname(current))) {
+      const body = await response.text();
+      const bodyBvid = findBvid(body);
+      if (bodyBvid) {
+        return {
+          bvid: bodyBvid,
+          inputUrl: inputValue,
+          resolvedUrl: current.toString(),
+          sourceType,
+        };
+      }
+    }
+    break;
+  }
+
+  if (sourceType === "QQ 小程序链接") {
+    throw new ApiError(
+      "无法从 QQ 小程序链接中还原 B 站视频地址，请在 QQ 中打开后复制 B 站视频链接或 b23.tv 短链接",
+      400,
+      -400,
+      { inputUrl: inputValue, sourceType },
+    );
+  }
+  throw new ApiError("无法从 b23.tv 短链接中提取 BV 号", 400, -400, {
+    inputUrl: inputValue,
+    sourceType,
+  });
+}
+
+
+async function resolveVideoSource(input, env) {
+  const inputValue = String(input.url ?? input.bvid ?? "").trim();
+  if (!inputValue) {
+    throw new ApiError("缺少 bvid 或 url 参数", 400, -400);
+  }
+
+  const directBvid = findBvid(inputValue) || (BVID_RE.test(inputValue) ? inputValue : null);
+  if (directBvid) {
+    const sourceUrl = parseHttpUrl(inputValue);
+    return {
+      bvid: directBvid,
+      inputUrl: inputValue,
+      resolvedUrl: sourceUrl ? sourceUrl.toString() : null,
+      sourceType: sourceUrl ? "B站视频链接" : "BV号",
+    };
+  }
+
+  const sourceUrl = parseHttpUrl(inputValue);
+  if (!sourceUrl) throw new ApiError("无效的 bvid 或视频 url", 400, -400);
+
+  if (isHostname(sourceUrl, "b23.tv")) {
+    return resolveRedirectSource(sourceUrl, env, "b23.tv 短链接", inputValue);
+  }
+  if (isHostname(sourceUrl, "m.q.qq.com")) {
+    return resolveRedirectSource(sourceUrl, env, "QQ 小程序链接", inputValue);
+  }
+
+  throw new ApiError("链接中未找到 BV 号，仅支持 B站视频链接和 b23.tv 短链接", 400, -400, {
+    inputUrl: inputValue,
+  });
+}
+
+
 function mediaCandidates(entry) {
   const urls = [];
   const primary = entry.url || entry.baseUrl || entry.base_url;
@@ -337,8 +484,9 @@ function makeDanmakuLinks(request, input, bvid, aid, cid, page) {
 async function getDanmakuXml(input, env) {
   const cid = readNumber(input.cid, null, "cid", { min: 1 });
   const sourceUrl = `https://comment.bilibili.com/${encodeURIComponent(cid)}.xml`;
-  const referer = input.bvid
-    ? `https://www.bilibili.com/video/${String(input.bvid).trim()}`
+  const bvid = findBvid(input.bvid) || String(input.bvid || "").trim();
+  const referer = bvid
+    ? `https://www.bilibili.com/video/${bvid}`
     : "https://www.bilibili.com/";
   return fetchBiliText(sourceUrl, env, referer);
 }
@@ -357,8 +505,8 @@ function xmlResponse(request, env, xml, status = 200) {
 
 
 async function parseVideo(input, env, request) {
-  const bvid = String(input.bvid || "").trim();
-  if (!BVID_RE.test(bvid)) throw new ApiError("无效的 bvid", 400, -400);
+  const source = await resolveVideoSource(input, env);
+  const bvid = source.bvid;
 
   const pageNumber = readNumber(input.page ?? input.p, 1, "page", { min: 1 });
   const qn = readNumber(input.qn, 80, "qn", { min: 1 });
@@ -482,6 +630,11 @@ async function parseVideo(input, env, request) {
   };
 
   return {
+    source: {
+      input: source.inputUrl,
+      resolvedUrl: source.resolvedUrl,
+      type: source.sourceType,
+    },
     bvid: video.bvid,
     aid: video.aid,
     cid: video.cid,
