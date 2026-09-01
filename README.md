@@ -126,7 +126,7 @@ curl 'https://api.example.com/api/parse' \
 - `https://www.bilibili.com/video/BV1B7411m7LV/?vd_source=...`
 - `https://b23.tv/7WpblY1`
 
-`b23.tv` 短链接由服务端跟随重定向并提取 BV 号，不会保存短链接内容。QQ 小程序分享链接（例如 `m.q.qq.com/a/s/...`）在电脑端通常只返回扫码页面，页面不包含 B 站视频地址，因此无法可靠自动还原；请在 QQ 中打开后复制 B 站视频链接或 `b23.tv` 短链接。
+`b23.tv` 短链接由服务端跟随重定向并提取 BV 号，不会保存短链接内容。`url` 目前只支持 B站视频链接和 `b23.tv` 短链接。
 
 成功响应：
 

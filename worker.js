@@ -251,12 +251,8 @@ function isBilibiliHostname(url) {
 }
 
 
-function isSupportedSourceHostname(url) {
-  return isBilibiliHostname(url) || isHostname(url, "qq.com");
-}
-
-
-async function resolveRedirectSource(url, env, sourceType, inputValue) {
+async function resolveShortLink(url, env, inputValue) {
+  const sourceType = "b23.tv 短链接";
   let current = url;
   const visited = new Set();
 
@@ -298,14 +294,13 @@ async function resolveRedirectSource(url, env, sourceType, inputValue) {
       } catch {
         break;
       }
-      if (!isSupportedSourceHostname(next)) break;
+      if (!isBilibiliHostname(next)) break;
       current = next;
       continue;
     }
 
-    // 某些 QQ 小程序页面不会跳转，而是把目标地址放在 HTML 中。
-    // 只读取受支持来源的页面，避免把 url 参数变成任意地址请求代理。
-    if (response.ok && (sourceType === "QQ 小程序链接" || isBilibiliHostname(current))) {
+    // 允许 b23.tv 返回 HTML 页面时，从受支持的 B 站页面中提取 BV 号。
+    if (response.ok && isBilibiliHostname(current)) {
       const body = await response.text();
       const bodyBvid = findBvid(body);
       if (bodyBvid) {
@@ -320,14 +315,6 @@ async function resolveRedirectSource(url, env, sourceType, inputValue) {
     break;
   }
 
-  if (sourceType === "QQ 小程序链接") {
-    throw new ApiError(
-      "无法从 QQ 小程序链接中还原 B 站视频地址，请在 QQ 中打开后复制 B 站视频链接或 b23.tv 短链接",
-      400,
-      -400,
-      { inputUrl: inputValue, sourceType },
-    );
-  }
   throw new ApiError("无法从 b23.tv 短链接中提取 BV 号", 400, -400, {
     inputUrl: inputValue,
     sourceType,
@@ -356,10 +343,7 @@ async function resolveVideoSource(input, env) {
   if (!sourceUrl) throw new ApiError("无效的 bvid 或视频 url", 400, -400);
 
   if (isHostname(sourceUrl, "b23.tv")) {
-    return resolveRedirectSource(sourceUrl, env, "b23.tv 短链接", inputValue);
-  }
-  if (isHostname(sourceUrl, "m.q.qq.com")) {
-    return resolveRedirectSource(sourceUrl, env, "QQ 小程序链接", inputValue);
+    return resolveShortLink(sourceUrl, env, inputValue);
   }
 
   throw new ApiError("链接中未找到 BV 号，仅支持 B站视频链接和 b23.tv 短链接", 400, -400, {
